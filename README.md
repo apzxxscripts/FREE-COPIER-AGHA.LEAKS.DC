@@ -11,7 +11,7 @@ This tool is **exclusive** — made only for our **Discord members** 🕵️‍�
 
 ## 🧠 How to Use
 1. Join our Discord 👉 [https://discord.gg/REC6NEWAck](https://discord.gg/REC6NEWAck)
-2. Get the **password** from the #key channel 🔑
+2. Get the **password** from the Script Channel
 3. Enter your key inside the GUI prompt.
 4. Enjoy the power of **AGHA.LEAKS Free Version** ⚙️
 
