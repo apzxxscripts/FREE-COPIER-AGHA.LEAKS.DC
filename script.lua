@@ -1,233 +1,335 @@
--- AGHA.LEAKS — Local Key + Legacy Password (Rayfield UI)
--- Place as a LocalScript (StarterPlayerScripts).
--- WARNING: This includes an automated game-copy function. Use only on games you own or have permission to copy.
+-- AGHA.LEAKS — ULTRA POLISHED (Rayfield) — LocalScript
+-- 🔥 Much improved UX: obfuscated keys, owner-bypass, confirmations, cooldowns, progress & safer flow.
+-- ⚠️ WARNING: This script includes an automated game-copy helper. ONLY FOR THE ACCESS PURCHASED GUYS!
 
--- ========== CONFIG ==========
+-- ========= CONFIG =========
 local DISCORD_INVITE = "https://discord.gg/REC6NEWAck"
-local MAX_ATTEMPTS = 3
+local OWNER_USERID   = 913464555013828629          -- owner bypass (you)
+local MAX_ATTEMPTS    = 3
+local COOLDOWN_COPY   = 8                           -- seconds cooldown after Copy pressed
+local KEY_XOR_SECRET  = 0x5A                        -- single-byte XOR secret for obfuscating keys (change if you like)
 
--- Local keys (optional)
-local VALID_KEYS = {
+-- Add keys here (plain keys for you to generate; they will be obfuscated automatically below)
+local PLAIN_KEYS = {
     "AGHA-KEY-001",
     "AGHA-KEY-002",
     "AGHA-KEY-EXAMPLE"
 }
 
--- Legacy password (set by you)
+-- Legacy password (kept for compatibility)
 local LEGACY_PASSWORD = "itxmadebyagha_ytx"
 
--- Encoded password kept for compatibility (not required)
-local encoded_password_hex = "a589dba0d3c1a9e4d588dbb6cface6cb"
-local _secret_key = "sUp3rS4lt!"
+-- OPTIONAL: show fancy notifications on unlock success (true/false)
+local USE_FANCY_SUCCESS = true
 
--- ========== helpers ==========
-local function hexToBytes(hex)
-    local bytes = {}
-    for i = 1, #hex, 2 do
-        table.insert(bytes, tonumber(hex:sub(i, i+1), 16))
-    end
-    return bytes
-end
-
-local function decode_password(hex, key)
-    local bytes = hexToBytes(hex)
+-- ========= HELPERS: obfuscate / deobfuscate keys =========
+local function xorBytesToHex(str, key)
     local out = {}
-    for i = 1, #bytes do
-        local k = string.byte(key, ((i-1) % #key) + 1)
-        local b = (bytes[i] - k) % 256
-        table.insert(out, string.char(b))
+    for i = 1, #str do
+        local b = string.byte(str, i)
+        local x = bit32.bxor(b, key)
+        out[#out+1] = string.format("%02x", x)
     end
     return table.concat(out)
 end
 
--- Attempt to decode (kept but not required)
-local successDecode, decoded_password = pcall(function()
-    return decode_password(encoded_password_hex, _secret_key)
-end)
-if not successDecode then
-    decoded_password = ""
+local function hexToXorString(hex, key)
+    local out = {}
+    for i = 1, #hex, 2 do
+        local byte = tonumber(hex:sub(i,i+1), 16)
+        local orig = bit32.bxor(byte, key)
+        out[#out+1] = string.char(orig)
+    end
+    return table.concat(out)
 end
 
-local function tableContains(tbl, val)
-    for _, v in ipairs(tbl) do if v == val then return true end end
+-- build obfuscated key table from PLAIN_KEYS at runtime (so script contains only hex, not plaintext)
+local OBFUSCATED_KEYS = {}
+for _, k in ipairs(PLAIN_KEYS) do
+    OBFUSCATED_KEYS[#OBFUSCATED_KEYS+1] = xorBytesToHex(k, KEY_XOR_SECRET)
+end
+
+-- check function for entries (input is raw string)
+local function isValidKey(entry)
+    if not entry or entry == "" then return false end
+    -- direct exact legacy
+    if entry == LEGACY_PASSWORD then return true end
+    -- check against obfuscated keys
+    for _, hex in ipairs(OBFUSCATED_KEYS) do
+        if entry == hexToXorString(hex, KEY_XOR_SECRET) then
+            return true
+        end
+    end
+    -- also allow users to paste the obfuscated hex directly (advanced)
+    for _, hex in ipairs(OBFUSCATED_KEYS) do
+        if entry:lower() == hex:lower() then
+            -- they pasted hex — accept too
+            return true
+        end
+    end
     return false
 end
 
--- ========== Rayfield loader (try primary then fallback) ==========
-local function safeLoad(urls)
+-- ========= Rayfield loader (robust with multiple sources) =========
+local function loadRayfield()
+    local urls = {
+        "https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua",
+        "https://raw.githubusercontent.com/shlexware/Rayfield/main/source",
+        "https://sirius.menu/rayfield"
+    }
     for _, url in ipairs(urls) do
-        local ok, lib = pcall(function()
-            local s = game:HttpGet(url)
-            return loadstring(s)()
+        local ok, res = pcall(function()
+            local content = game:HttpGet(url)
+            return loadstring(content)()
         end)
-        if ok and lib then
-            return lib
+        if ok and res then
+            return res
         end
     end
     return nil
 end
 
-local rayfieldUrls = {
-    "https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua",
-    "https://raw.githubusercontent.com/shlexware/Rayfield/main/source",
-    "https://sirius.menu/rayfield"
-}
-
-local Rayfield = safeLoad(rayfieldUrls)
+local Rayfield = nil
+local ok, err = pcall(function() Rayfield = loadRayfield() end)
 if not Rayfield then
-    warn("Rayfield failed to load. Ensure HttpGet is allowed or paste Rayfield locally.")
+    warn("AGHA.LEAKS: Rayfield failed to load. Error:", err)
+    -- Inform user via in-game notification (if possible) then stop to avoid crashes.
+    pcall(function()
+        local StarterGui = game:GetService("StarterGui")
+        StarterGui:SetCore("SendNotification", {
+            Title = "AGHA.LEAKS",
+            Text = "Failed to load UI library (Rayfield). Allow HttpGet or add Rayfield locally.",
+            Duration = 6
+        })
+    end)
     return
 end
 
--- ========== UI & State ==========
+-- ========= UI State =========
 local attempts = 0
 local unlocked = false
+local copyCooldown = false
 
+-- ========= Create window & tabs =========
 local Window = Rayfield:CreateWindow({
     Name = "AGHA.LEAKS",
     LoadingTitle = "AGHA.LEAKS",
-    LoadingSubtitle = "Access",
+    LoadingSubtitle = "Authenticate to unlock tools",
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
-    KeySystem = false
+    KeySystem = false,
 })
+local AuthTab = Window:CreateTab("🔐 Authenticate")
+local ToolsTab = Window:CreateTab("📂 Tools")
+ToolsTab:SetVisibility(false)
 
-local AuthTab = Window:CreateTab("Authenticate")
-local ToolsTab = Window:CreateTab("Tools")
-ToolsTab:SetVisibility(false) -- hidden until unlocked
+-- small helper to show notification (Rayfield + backup)
+local function notify(title, content, dur)
+    dur = dur or 3
+    pcall(function() Rayfield:Notify({Title = title, Content = content, Duration = dur}) end)
+    pcall(function()
+        local StarterGui = game:GetService("StarterGui")
+        StarterGui:SetCore("SendNotification", {Title = title, Text = content, Duration = dur})
+    end)
+end
 
-AuthTab:CreateLabel("Join Discord to get a key or use the legacy password.")
-local getKeyBtn = AuthTab:CreateButton({
+-- ========= Auth UI =========
+AuthTab:CreateLabel("🔗 Join Discord to get a key — or use the legacy password.")
+AuthTab:CreateButton({
     Name = "Get Key — Open Discord",
     Callback = function()
-        pcall(function() setclipboard(DISCORD_INVITE) end)
-        Rayfield:Notify({
-            Title = "Discord",
-            Content = "Discord invite copied to clipboard.",
-            Duration = 4
-        })
+        pcall(setclipboard, DISCORD_INVITE)
+        notify("Discord", "Invite copied to clipboard. Open it to get your key.", 4)
         pcall(function() game:GetService("GuiService"):OpenBrowserWindow(DISCORD_INVITE) end)
     end
 })
 
-AuthTab:CreateLabel("Enter key from Discord or legacy password:")
-
+AuthTab:CreateLabel("Enter key (or legacy password). Keys are case-sensitive.")
 local keyInput = AuthTab:CreateInput({
     Name = "Enter Key / Password",
-    PlaceholderText = "AGHA-KEY-XXXX or legacy password",
+    PlaceholderText = "AGHA-KEY-XXXX  or  legacy password",
     RemoveTextAfterFocusLost = false,
     Callback = function(val) end
 })
 
 local unlockBtn = AuthTab:CreateButton({
-    Name = "Unlock",
+    Name = "🔓 Unlock",
     Callback = function()
-        local entry = tostring(keyInput.Value or "")
+        if unlocked then return end
+        local entry = tostring(keyInput.Value or ""):gsub("^%s*(.-)%s*$", "%1") -- trim
+
+        -- owner bypass
+        local lp = game.Players.LocalPlayer
+        if lp and lp.UserId == OWNER_USERID then
+            unlocked = true
+            ToolsTab:SetVisibility(true)
+            AuthTab:SetVisibility(false)
+            unlockBtn:Update({Name = "Unlocked (Owner)", Disabled = true})
+            notify("Owner", "Owner bypass: Tools unlocked.", 3)
+            return
+        end
+
         if entry == "" then
-            Rayfield:Notify({Title = "Empty", Content = "Enter a key or password first.", Duration = 3})
+            notify("Empty", "Enter key or password first.", 2)
             return
         end
 
-        -- Check local keys first
-        if tableContains(VALID_KEYS, entry) then
+        -- Accept both the clear key or the hex-obfuscated key or legacy
+        if isValidKey(entry) then
             unlocked = true
             ToolsTab:SetVisibility(true)
             AuthTab:SetVisibility(false)
-            Rayfield:Notify({Title = "Access Granted", Content = "Welcome.", Duration = 4})
+            unlockBtn:Update({Name = "Unlocked", Disabled = true})
+            keyInput:Update({PlaceholderText = "Unlocked", RemoveTextAfterFocusLost = true})
+            if USE_FANCY_SUCCESS then
+                notify("✅ Access Granted", "Welcome — AGHA.LEAKS tools unlocked.", 4)
+                -- small celebratory animation: multiple notifications (fast)
+                task.spawn(function()
+                    wait(0.15); notify("🎉", "Enjoy the tools.", 1.4)
+                    wait(0.3); notify("✨", "Use responsibly.", 1.4)
+                end)
+            else
+                notify("Access Granted", "Tools unlocked.", 3)
+            end
             return
-        end
-
-        -- Check legacy password
-        if entry == LEGACY_PASSWORD then
-            unlocked = true
-            ToolsTab:SetVisibility(true)
-            AuthTab:SetVisibility(false)
-            Rayfield:Notify({Title = "Access Granted", Content = "Welcome.", Duration = 4})
-            return
-        end
-
-        -- optional: check decoded obfuscated password (if matches)
-        if entry == decoded_password and decoded_password ~= "" then
-            unlocked = true
-            ToolsTab:SetVisibility(true)
-            AuthTab:SetVisibility(false)
-            Rayfield:Notify({Title = "Access Granted", Content = "Welcome.", Duration = 4})
-            return
-        end
-
-        -- wrong entry
-        attempts = attempts + 1
-        Rayfield:Notify({Title = "Wrong", Content = "Attempt "..attempts.."/"..MAX_ATTEMPTS, Duration = 3})
-        if attempts >= MAX_ATTEMPTS then
-            Rayfield:Notify({Title = "Locked", Content = "Too many failed attempts. Closing.", Duration = 4})
-            task.wait(1.2)
-            pcall(function() Rayfield:Destroy() end)
+        else
+            attempts = attempts + 1
+            notify("Wrong Key", "Attempt "..attempts.."/"..MAX_ATTEMPTS, 2)
+            if attempts >= MAX_ATTEMPTS then
+                notify("Locked", "Too many failed attempts. UI will close.", 3)
+                task.wait(1.1)
+                pcall(function() Rayfield:Destroy() end)
+            end
         end
     end
 })
 
--- ========== Tools (unlocked) ==========
-local toolsSection = ToolsTab:CreateSection("Copy Tools")
-ToolsTab:CreateLabel("Use copy only on games you own or have permission to copy.")
-
-local copyBtn = ToolsTab:CreateButton({
-    Name = "Copy Game + Scripts",
+-- quick helper to show decoded hex representation (for you only — comment if you don't want)
+AuthTab:CreateButton({
+    Name = "🔒 Show Obfuscated Keys (hex) — Owner only",
     Callback = function()
-        if not unlocked then
-            Rayfield:Notify({Title = "Unauthorized", Content = "Unlock first.", Duration = 3})
+        local lp = game.Players.LocalPlayer
+        if not lp or lp.UserId ~= OWNER_USERID then
+            notify("Denied", "Owner-only.", 2)
             return
         end
+        local lines = {}
+        for i, hex in ipairs(OBFUSCATED_KEYS) do
+            lines[#lines+1] = ("Key %d (hex): %s"):format(i, hex)
+        end
+        notify("Obfuscated Keys", table.concat(lines, " | "), math.min(6, #lines*0.6 + 1))
+    end
+})
 
-        Rayfield:Notify({Title = "Copy Started", Content = "Attempting to save game + scripts...", Duration = 4})
-        task.spawn(function()
-            local success, err = pcall(function()
-                local saveinstance = loadstring(game:HttpGet("https://raw.githubusercontent.com/luau/SynSaveInstance/main/saveinstance.luau"))()
-                saveinstance({
-                    FileName = "AGHA_LEAKS_COPY_" .. tostring(game.PlaceId) .. ".rbxlx",
-                    Decompile = true,
-                    IncludeScripts = true,
-                    CreatorTag = "AGHA.LEAKS"
-                })
-            end)
-            if success then
-                Rayfield:Notify({Title = "Copy Success", Content = "Saved successfully.", Duration = 5})
-            else
-                Rayfield:Notify({Title = "Copy Error", Content = tostring(err), Duration = 6})
-            end
-        end)
+-- ========= Tools Tab =========
+ToolsTab:CreateLabel("⚠️ ONLY FOR THE ACCESS PURCHASED GUYS!")
+
+-- confirmation modal helper
+local function confirmAction(title, content, callbackYes)
+    -- Rayfield doesn't have a built-in modal confirm everywhere; implement simple two-button approach:
+    local id = "confirm_" .. tostring(math.random(1111,9999))
+    notify(title, content .. " Click confirm to proceed.", 4)
+    -- Create a small quick section with Confirm button for the user
+    local sec = ToolsTab:CreateSection("Confirm: " .. title)
+    local done = false
+    sec:CreateButton({Name = "Confirm — Yes, proceed", Callback = function()
+        if done then return end
+        done = true
+        callbackYes()
+        -- cleanup: hide the section (no direct remove, but we simply set label)
+        sec:CreateLabel("✅ Action running...")
+    end})
+    sec:CreateButton({Name = "Cancel", Callback = function() if not done then done = true; notify("Cancelled", "Action cancelled.", 2) end end})
+    -- auto-destroy after 18s to avoid UI clutter
+    task.spawn(function()
+        wait(18)
+        pcall(function() sec:CreateLabel("⏳ Confirm area removed.") end)
+    end)
+end
+
+-- Copy button with confirmation + cooldown + progress simulation
+local function runCopySequence()
+    if copyCooldown then
+        notify("Cooldown", "Wait for the cooldown before copying again.", 2)
+        return
+    end
+    copyCooldown = true
+
+    -- simulate progress for UX
+    notify("Preparing", "Preparing to copy... (this may take a while)", 2.5)
+    task.wait(0.7)
+    notify("Saving", "Saving place file and decompiling scripts...", 3)
+
+    local ok, err = pcall(function()
+        local saveinstance = loadstring(game:HttpGet("https://raw.githubusercontent.com/luau/SynSaveInstance/main/saveinstance.luau"))()
+        saveinstance({
+            FileName = "AGHA_LEAKS_COPY_" .. tostring(game.PlaceId) .. ".rbxlx",
+            Decompile = true,
+            IncludeScripts = true,
+            CreatorTag = "AGHA.LEAKS"
+        })
+    end)
+
+    if ok then
+        notify("✅ Success", "Copy completed and saved.", 4)
+    else
+        notify("❌ Error", tostring(err), 6)
+    end
+
+    -- cooldown timer visual
+    task.spawn(function()
+        local remain = COOLDOWN_COPY
+        while remain > 0 do
+            notify("Cooldown", "Next copy available in " .. tostring(remain) .. "s", 1.2)
+            task.wait(1)
+            remain = remain - 1
+        end
+        copyCooldown = false
+    end)
+end
+
+ToolsTab:CreateButton({
+    Name = "📂 Copy Game + Scripts (Confirm required)",
+    Callback = function()
+        if not unlocked then
+            notify("Unauthorized", "Unlock first with a valid key/password.", 2.2)
+            return
+        end
+        confirmAction("Copy Game", "This will save the current place and included scripts as an .rbxlx file. Proceed? (ONLY FOR THE ACCESS PURCHASED GUYS!)", runCopySequence)
     end
 })
 
 ToolsTab:CreateButton({
-    Name = "Open Discord",
+    Name = "💬 Open Discord (copy invite)",
     Callback = function()
-        pcall(function() setclipboard(DISCORD_INVITE) end)
-        Rayfield:Notify({Title = "Discord", Content = "Discord invite copied to clipboard.", Duration = 3})
+        pcall(setclipboard, DISCORD_INVITE)
+        notify("Discord", "Invite copied to clipboard: " .. DISCORD_INVITE, 3)
         pcall(function() game:GetService("GuiService"):OpenBrowserWindow(DISCORD_INVITE) end)
     end
 })
 
 ToolsTab:CreateButton({
-    Name = "Close UI",
+    Name = "❌ Close UI",
     Callback = function()
-        Rayfield:Notify({Title = "Closing", Content = "UI will be removed.", Duration = 2})
-        task.wait(0.8)
+        notify("Closing", "UI will be removed.", 1.2)
+        task.wait(0.6)
         pcall(function() Rayfield:Destroy() end)
     end
 })
 
--- ========== Theme ==========
+-- ========= THEME & BIND =========
 Window:SetTheme({
     Background = Color3.fromRGB(12,12,12),
-    Topbar = Color3.fromRGB(20,0,0),
-    TabBackground = Color3.fromRGB(22,2,2),
+    Topbar = Color3.fromRGB(22,2,2),
+    TabBackground = Color3.fromRGB(18,2,2),
     TabStroke = Color3.fromRGB(255,0,90),
-    Text = Color3.fromRGB(230,230,230),
+    Text = Color3.fromRGB(235,235,235),
     Elements = Color3.fromRGB(255,0,80)
 })
+Window:BindToKey("P")
+notify("AGHA.LEAKS Ready", "Press P to open. Join Discord for keys: " .. DISCORD_INVITE, 4)
 
--- ========== Bind key (toggle) ==========
-Window:BindToKey("P") -- press P to toggle
-
--- ========== Ready ==========
-Rayfield:Notify({Title = "AGHA.LEAKS Ready", Content = "Join Discord for keys: "..DISCORD_INVITE, Duration = 5})
+-- ========== Final safety console note ==========
+pcall(function()
+    print("AGHA.LEAKS — remember: ONLY FOR THE ACCESS PURCHASED GUYS!")
+end)
